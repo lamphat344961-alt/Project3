@@ -2,3 +2,6 @@ data_v1/
 docs/
 results/
 embeddings/
+.venv/
+__pycache__/
+*.py[cod]
