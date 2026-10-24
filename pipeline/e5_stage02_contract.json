@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "stage": "02",
+  "runtime_status": "PROPOSED_FOR_CLAUDE_REVIEW",
+  "full_run_authorized": false,
+  "reuse_native_t512": false,
+  "models_yaml_sha256": "bdc8a5f2f72d699ff76dbedf5ceca015d5f2c2d2ff531c6289d900fd4b3e01d6",
+  "runtime": {
+    "device": "cuda:0", "dtype": "float32", "batch_size": 8,
+    "seed": 42, "cublas_workspace_config": ":4096:8",
+    "deterministic_algorithms": true, "tf32": false,
+    "autocast": false, "batch_order": "token_length_then_original_index"
+  },
+  "smoke": {"n_apps": 500, "max_abs_difference_exclusive": 0.00001, "max_l2_norm_error": 0.00001},
+  "cells": [
+    ["tn1", "vi", "char_budget"], ["tn1", "vi", "native"],
+    ["tn2", "en", "native"], ["tn2", "vi", "native"],
+    ["tn2", "en", "token_budget"], ["tn2", "vi", "token_budget"]
+  ],
+  "datasets": {
+    "tn1": {
+      "path": "data_v1/benchmark_v1.parquet", "n_rows": 23883,
+      "sha256": "0cf5e72c00f1392e9f7e83ef2fc282e8deb9e81bc6e5d332ce5d761a41f7c52b",
+      "ordered_ids_sha256": "f21266bf1068f2dc0490ae8bbcc6be49da582d39d937173bc7b0a8cffa2ee2a7"
+    },
+    "tn2": {
+      "path": "data_v1/paired_en.parquet", "n_rows": 13657,
+      "sha256": "9208bfc42fc66b45c19496af34088cb742d1ea2e7cca25998e139b16c7e77493",
+      "ordered_ids_sha256": "69a7363812332f2e99b424858a605c143705924670e450feb328082b3576bc64"
+    }
+  }
+}
