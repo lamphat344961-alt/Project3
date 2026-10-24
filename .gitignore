@@ -5,3 +5,4 @@ embeddings/
 .venv/
 __pycache__/
 *.py[cod]
+output/kaggle/
