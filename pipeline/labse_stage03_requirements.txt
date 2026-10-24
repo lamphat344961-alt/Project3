@@ -1,0 +1,3 @@
+# Add only to a LaBSE-specific runtime; do not install into the running E5 session.
+sentence-transformers==6.1.0
+safetensors==0.8.0

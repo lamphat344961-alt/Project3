@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "status": "PROPOSED_FOR_AUTHOR_AND_CLAUDE_REVIEW",
+  "model_id": "sentence-transformers/LaBSE",
+  "revision": "836121a0533e5664b21c7aacc5d22951f2b8b25b",
+  "dimension": 768,
+  "native_cap": 256,
+  "prefix": "",
+  "word_segmentation": false,
+  "pooling": "cls_then_dense_tanh_then_l2",
+  "common_characters": 950,
+  "primary_cells_proposed": [["tn1", "vi", "char_budget"], ["tn1", "vi", "native"], ["tn2", "en", "native"], ["tn2", "vi", "native"]],
+  "reference_probe": {"device": "cpu", "dtype": "float32", "max_abs_difference": 0.00001, "max_norm_error": 0.00001},
+  "production_runtime_proposed": {"device": "cuda:0", "dtype": "float32", "batch_size": 8, "seed": 42, "deterministic_algorithms": true, "tf32": false, "autocast": false},
+  "production_authorized": false,
+  "datasets": {
+    "tn1": {"path": "data_v1/benchmark_v1.parquet", "n_rows": 23883, "sha256": "0cf5e72c00f1392e9f7e83ef2fc282e8deb9e81bc6e5d332ce5d761a41f7c52b", "ordered_ids_sha256": "f21266bf1068f2dc0490ae8bbcc6be49da582d39d937173bc7b0a8cffa2ee2a7"},
+    "tn2": {"path": "data_v1/paired_en.parquet", "n_rows": 13657, "sha256": "9208bfc42fc66b45c19496af34088cb742d1ea2e7cca25998e139b16c7e77493", "ordered_ids_sha256": "69a7363812332f2e99b424858a605c143705924670e450feb328082b3576bc64"}
+  }
+}
