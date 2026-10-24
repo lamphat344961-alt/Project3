@@ -129,6 +129,43 @@ class Stage02Tests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "DATASET_HASH:tn1"):
             stage.load_inputs(contract)
 
+    def test_owner_authorization_does_not_change_smoke_tested_contract(self):
+        binding = {"commit": "fixture", "sha256": {"contract": "unchanged"}}
+        with tempfile.TemporaryDirectory() as temp:
+            smoke = Path(temp) / "smoke.json"
+            smoke.write_text('{"status":"SMOKE_PASS"}', encoding="utf-8")
+            approval = Path(temp) / "approval.json"
+            approval.write_text(json.dumps({
+                "full_run_authorized": True, "approved_by": "fixture owner",
+                "approval_reference": "fixture approval only", "full_run_id": "full_001",
+                "source_binding": binding, "smoke_receipt_sha256": stage.embed.sha256(smoke),
+            }), encoding="utf-8")
+            original_contract = stage.CONTRACT.read_bytes()
+            result = stage.validate_full_authorization(approval, smoke, binding, "full_001")
+            self.assertTrue(result["record"]["full_run_authorized"])
+            self.assertEqual(stage.CONTRACT.read_bytes(), original_contract)
+            with self.assertRaisesRegex(RuntimeError, "AUTHORIZED_RUN_ID_MISMATCH"):
+                stage.validate_full_authorization(approval, smoke, binding, "another_run")
+            smoke.write_text('{"status":"changed"}', encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "AUTHORIZED_SMOKE_RECEIPT_MISMATCH"):
+                stage.validate_full_authorization(approval, smoke, binding, "full_001")
+
+    def test_full_authorization_requires_owner_evidence_and_same_sources(self):
+        with self.assertRaisesRegex(RuntimeError, "PENDING_OWNER_AUTHORIZATION"):
+            stage.validate_full_authorization(None, None, {}, "full")
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "approval.json"
+            for data, error in [
+                ({"full_run_authorized": False}, "FULL_RUN_NOT_AUTHORIZED"),
+                ({"full_run_authorized": True}, "OWNER_APPROVAL_FIELD_MISSING"),
+                ({"full_run_authorized": True, "approved_by": "fixture",
+                  "approval_reference": "fixture", "full_run_id": "full",
+                  "source_binding": {"commit": "wrong"}}, "AUTHORIZED_SOURCE_MISMATCH"),
+            ]:
+                path.write_text(json.dumps(data), encoding="utf-8")
+                with self.assertRaisesRegex(RuntimeError, error):
+                    stage.validate_full_authorization(path, None, {}, "full")
+
 
 if __name__ == "__main__":
     unittest.main()

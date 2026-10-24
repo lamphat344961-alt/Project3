@@ -219,11 +219,28 @@ def validate_saved_output(base, expected_vectors, expected_ids):
     require(np.array_equal(saved, expected_vectors), "SAVED_VECTOR_BYTES_MISMATCH")
 
 
+def validate_full_authorization(path, smoke_path, binding, full_run_id):
+    """Bind the Owner's later approval without editing the smoke-tested contract."""
+    require(path is not None, "FULL_RUN_PENDING_OWNER_AUTHORIZATION")
+    authorization = json.loads(path.read_text(encoding="utf-8"))
+    require(authorization.get("full_run_authorized") is True, "FULL_RUN_NOT_AUTHORIZED")
+    for field in ("approved_by", "approval_reference"):
+        require(isinstance(authorization.get(field), str) and authorization[field].strip(),
+                f"OWNER_APPROVAL_FIELD_MISSING:{field}")
+    require(authorization.get("full_run_id") == full_run_id, "AUTHORIZED_RUN_ID_MISMATCH")
+    require(authorization.get("source_binding") == binding, "AUTHORIZED_SOURCE_MISMATCH")
+    require(authorization.get("smoke_receipt_sha256") == embed.sha256(smoke_path),
+            "AUTHORIZED_SMOKE_RECEIPT_MISMATCH")
+    return {"path": str(path), "sha256": embed.sha256(path), "record": authorization}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=["preflight", "smoke", "full"])
     parser.add_argument("run_id")
     parser.add_argument("--smoke-receipt", type=Path)
+    parser.add_argument("--full-authorization", type=Path,
+                        help="Owner approval bound to the passed smoke receipt and this full run ID")
     parser.add_argument("--allow-download", action="store_true")
     args = parser.parse_args(argv)
     namespace = safe_namespace(args.run_id)
@@ -242,7 +259,6 @@ def main(argv=None):
                            dataset_checks="HASH_ROWS_ORDER_MATCH", planned_cells=contract["cells"])
         else:
             if args.mode == "full":
-                require(contract["full_run_authorized"] is True, "FULL_RUN_PENDING_REVIEW")
                 require_committed_sources(binding)
                 require(args.smoke_receipt is not None, "SMOKE_RECEIPT_REQUIRED")
                 smoke = json.loads(args.smoke_receipt.read_text(encoding="utf-8"))
@@ -250,6 +266,8 @@ def main(argv=None):
                         "SMOKE_SOURCE_OR_STATUS_MISMATCH")
                 require(len(smoke["cells"]) == 6 and all(c["comparison"]["passed"] for c in smoke["cells"]),
                         "SMOKE_CELLS_INCOMPLETE")
+                receipt["full_authorization"] = validate_full_authorization(
+                    args.full_authorization, args.smoke_receipt, binding, args.run_id)
             receipt["runtime"] = configure_runtime(contract["runtime"])
             snapshot, receipt["model_assets"] = resolve_assets(spec, allow_download=args.allow_download)
             if args.mode == "full":
