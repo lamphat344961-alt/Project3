@@ -167,5 +167,52 @@ class Stage02Tests(unittest.TestCase):
                     stage.validate_full_authorization(path, None, {}, "full")
 
 
+    def test_inference_only_exports_six_cells_without_running_local_analysis(self):
+        binding = {"commit": "fixture", "sha256": {"runner": "fixture"}}
+        frame = pd.DataFrame({"appId": ["app-fixture"], "genreId": ["genre-fixture"],
+                              "description_clean": ["fixture text"],
+                              "description_original_clean": ["fixture text"]})
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            authorization = root / "approval.json"
+            authorization.write_text(json.dumps({
+                "full_run_authorized": True, "approved_by": "fixture only",
+                "approval_reference": "fixture only", "full_run_id": "fixture_run",
+                "source_binding": binding, "execution_scope": "INFERENCE_ONLY_LOCAL_VALIDATION",
+            }), encoding="utf-8")
+            def fake_encode(df, *args, **kwargs):
+                self.assertFalse(kwargs["validate_output"])
+                return np.zeros((len(df), 1024), dtype=np.float32), {"fixture": True}
+            with patch.object(stage, "safe_namespace", return_value=root / "output"), \
+                 patch.object(stage, "source_binding", return_value=binding), \
+                 patch.object(stage, "require_committed_sources"), \
+                 patch.object(stage, "load_inputs", return_value=({"tn1": frame, "tn2": frame}, {})), \
+                 patch.object(stage, "configure_runtime", return_value={"fixture": True}), \
+                 patch.object(stage, "resolve_assets", return_value=(root, {"fixture": True})), \
+                 patch.object(stage, "run_cell", side_effect=fake_encode) as encoder, \
+                 patch.object(stage, "audit_full_paired_inputs", side_effect=AssertionError("local only")), \
+                 patch.object(stage, "compare_repeats", side_effect=AssertionError("local only")), \
+                 patch.object(stage, "validate_saved_output", side_effect=AssertionError("local only")), \
+                 patch.object(stage.np, "load", side_effect=AssertionError("no historical NPY needed")):
+                self.assertEqual(stage.main(["inference", "fixture_run", "--full-authorization", str(authorization)]), 0)
+                self.assertEqual(encoder.call_count, 6)
+            receipt = json.loads((root / "output/execution_receipt.json").read_text())
+            self.assertEqual(receipt["status"], "INFERENCE_COMPLETE_UNVALIDATED")
+            self.assertEqual(receipt["validation_status"], "PENDING_LOCAL")
+            self.assertNotIn("full_cohort_token_audit", receipt)
+            self.assertEqual(len(list((root / "output").glob("*.npy"))), 6)
+            for path in (root / "output").glob("*.app_ids.json"):
+                self.assertEqual(json.loads(path.read_text()), ["app-fixture"])
+
+    def test_inference_scope_is_explicit_in_owner_approval(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "approval.json"
+            path.write_text(json.dumps({"full_run_authorized": True, "approved_by": "fixture",
+                                       "approval_reference": "fixture", "full_run_id": "full",
+                                       "source_binding": {}}), encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "INFERENCE_ONLY_APPROVAL_REQUIRED"):
+                stage.validate_full_authorization(path, None, {}, "full", inference_only=True)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -6,3 +6,4 @@ embeddings/
 __pycache__/
 *.py[cod]
 output/kaggle/
+output/kaggle_inference/

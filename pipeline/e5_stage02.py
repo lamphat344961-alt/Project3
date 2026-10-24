@@ -108,7 +108,7 @@ def configure_runtime(runtime):
             "tf32": torch.backends.cuda.matmul.allow_tf32}
 
 
-def encode_prepared(prepared, tokenizer, model, device, batch_size):
+def encode_prepared(prepared, tokenizer, model, device, batch_size, *, validate_output=True):
     """Length-sort for batching, then restore original dataset order explicitly."""
     lengths = embed.token_lengths(tokenizer, prepared)
     order = np.lexsort((np.arange(len(prepared)), lengths))
@@ -126,7 +126,8 @@ def encode_prepared(prepared, tokenizer, model, device, batch_size):
                 vectors = F.normalize(pooled.float(), p=2, dim=1).cpu().numpy()
             require(vectors.shape == (len(indices), 1024), "EMBEDDING_SHAPE")
             result[indices] = vectors
-    validate_vectors(result, len(prepared))
+    if validate_output:
+        validate_vectors(result, len(prepared))
     digest = hashlib.sha256(json.dumps(prepared, ensure_ascii=False,
                                       separators=(",", ":")).encode("utf-8")).hexdigest()
     return result, {"prepared_text_sha256": digest,
@@ -164,7 +165,7 @@ def resolve_assets(spec, *, allow_download):
     return snapshot, {"checkpoint": spec["hf_name"], "revision": spec["revision"], "files_sha256": files}
 
 
-def run_cell(df, spec, cell, runtime, *, snapshot):
+def run_cell(df, spec, cell, runtime, *, snapshot, validate_output=True):
     experiment, language, condition = cell
     field = "description_clean" if language == "vi" else "description_original_clean"
     prepared = embed.prepare_neural_texts(df[field].tolist(), spec, condition,
@@ -179,7 +180,7 @@ def run_cell(df, spec, cell, runtime, *, snapshot):
         require(all(p.dtype == torch.float32 for p in model.parameters() if p.is_floating_point()),
                 "MODEL_DTYPE")
         return encode_prepared(prepared, tokenizer, model, torch.device(runtime["device"]),
-                               runtime["batch_size"])
+                               runtime["batch_size"], validate_output=validate_output)
     finally:
         del model
         torch.cuda.empty_cache()
@@ -219,7 +220,7 @@ def validate_saved_output(base, expected_vectors, expected_ids):
     require(np.array_equal(saved, expected_vectors), "SAVED_VECTOR_BYTES_MISMATCH")
 
 
-def validate_full_authorization(path, smoke_path, binding, full_run_id):
+def validate_full_authorization(path, smoke_path, binding, full_run_id, *, inference_only=False):
     """Bind the Owner's later approval without editing the smoke-tested contract."""
     require(path is not None, "FULL_RUN_PENDING_OWNER_AUTHORIZATION")
     authorization = json.loads(path.read_text(encoding="utf-8"))
@@ -229,14 +230,18 @@ def validate_full_authorization(path, smoke_path, binding, full_run_id):
                 f"OWNER_APPROVAL_FIELD_MISSING:{field}")
     require(authorization.get("full_run_id") == full_run_id, "AUTHORIZED_RUN_ID_MISMATCH")
     require(authorization.get("source_binding") == binding, "AUTHORIZED_SOURCE_MISMATCH")
-    require(authorization.get("smoke_receipt_sha256") == embed.sha256(smoke_path),
-            "AUTHORIZED_SMOKE_RECEIPT_MISMATCH")
+    if inference_only:
+        require(authorization.get("execution_scope") == "INFERENCE_ONLY_LOCAL_VALIDATION",
+                "INFERENCE_ONLY_APPROVAL_REQUIRED")
+    else:
+        require(authorization.get("smoke_receipt_sha256") == embed.sha256(smoke_path),
+                "AUTHORIZED_SMOKE_RECEIPT_MISMATCH")
     return {"path": str(path), "sha256": embed.sha256(path), "record": authorization}
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=["preflight", "smoke", "full"])
+    parser.add_argument("mode", choices=["preflight", "smoke", "full", "inference"])
     parser.add_argument("run_id")
     parser.add_argument("--smoke-receipt", type=Path)
     parser.add_argument("--full-authorization", type=Path,
@@ -258,6 +263,10 @@ def main(argv=None):
                            blockers=[] if torch.cuda.is_available() else ["CUDA_UNAVAILABLE_NO_CPU_FALLBACK"],
                            dataset_checks="HASH_ROWS_ORDER_MATCH", planned_cells=contract["cells"])
         else:
+            if args.mode == "inference":
+                require_committed_sources(binding)
+                receipt["full_authorization"] = validate_full_authorization(
+                    args.full_authorization, None, binding, args.run_id, inference_only=True)
             if args.mode == "full":
                 require_committed_sources(binding)
                 require(args.smoke_receipt is not None, "SMOKE_RECEIPT_REQUIRED")
@@ -273,14 +282,16 @@ def main(argv=None):
             if args.mode == "full":
                 require(smoke["runtime"] == receipt["runtime"], "SMOKE_RUNTIME_MISMATCH")
                 require(smoke["model_assets"] == receipt["model_assets"], "SMOKE_ASSETS_MISMATCH")
-            receipt["full_cohort_token_audit"] = audit_full_paired_inputs(
-                frames["tn2"], spec, snapshot=snapshot)
+            if args.mode != "inference":
+                receipt["full_cohort_token_audit"] = audit_full_paired_inputs(
+                    frames["tn2"], spec, snapshot=snapshot)
             for cell in contract["cells"]:
                 experiment, language, condition = cell
                 df = frames[experiment]
                 if args.mode == "smoke":
                     df = df.iloc[:contract["smoke"]["n_apps"]]
-                first, details = run_cell(df, spec, cell, contract["runtime"], snapshot=snapshot)
+                first, details = run_cell(df, spec, cell, contract["runtime"], snapshot=snapshot,
+                                          validate_output=args.mode != "inference")
                 summary = {"cell": cell, "n_rows": len(df), **details}
                 if args.mode == "smoke":
                     second, _ = run_cell(df, spec, cell, contract["runtime"], snapshot=snapshot)
@@ -292,7 +303,7 @@ def main(argv=None):
                     with repeat_path.open("xb") as handle:
                         np.save(handle, second)
                     summary["repeat_npy_sha256"] = embed.sha256(repeat_path)
-                else:
+                elif args.mode == "full":
                     historical = ROOT / "embeddings" / experiment / (base.name + ".npy")
                     old = np.load(historical, mmap_mode="r", allow_pickle=False)
                     validate_vectors(old, len(df))
@@ -309,12 +320,22 @@ def main(argv=None):
                 embed.save_metadata(base, {**summary, "recipe": spec, "runtime": receipt["runtime"],
                                           "source_binding": binding,
                                           "dataset_sha256": contract["datasets"][experiment]["sha256"],
-                                          "mode": args.mode, "reused": False}, create_only=True)
-                validate_saved_output(base, first, rows.appId.tolist())
+                                          "mode": args.mode, "reused": False,
+                                          "validation_status": "PENDING_LOCAL" if args.mode == "inference" else "VALIDATED_IN_RUN"}, create_only=True)
+                if args.mode == "inference":
+                    embed.write_json_create_only(base.with_suffix(".app_ids.json"), rows.appId.tolist())
+                else:
+                    validate_saved_output(base, first, rows.appId.tolist())
                 summary["artifacts"] = {p.name: embed.sha256(p) for p in embed.output_artifact_paths(base)}
+                if args.mode == "inference":
+                    ids_path = base.with_suffix(".app_ids.json")
+                    summary["artifacts"][ids_path.name] = embed.sha256(ids_path)
                 receipt["cells"].append(summary)
                 print(json.dumps({"completed_cell": cell, "mode": args.mode}), flush=True)
-            receipt["status"] = "SMOKE_PASS" if args.mode == "smoke" else "FULL_COMPLETE"
+            receipt["status"] = ("INFERENCE_COMPLETE_UNVALIDATED" if args.mode == "inference"
+                                 else "SMOKE_PASS" if args.mode == "smoke" else "FULL_COMPLETE")
+            if args.mode == "inference":
+                receipt["validation_status"] = "PENDING_LOCAL"
     except Exception as exc:
         receipt.update(status="FAILED", error=f"{type(exc).__name__}: {exc}")
         raise

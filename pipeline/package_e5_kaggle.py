@@ -31,7 +31,7 @@ def git(*args):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output-dir", type=Path, default=ROOT / "output/kaggle")
+    parser.add_argument("--output-dir", type=Path, default=ROOT / "output/kaggle_inference")
     args = parser.parse_args(argv)
     output = args.output_dir.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -55,19 +55,11 @@ def main(argv=None):
         if sha256(path) != expected["sha256"]:
             raise RuntimeError(f"Frozen dataset hash mismatch: {path}")
         payload.append(path)
-    # Compare to the saved evaluation's current-byte hashes, not merely filenames.
-    evaluation = json.loads((ROOT / "results/evaluation/evaluation_meta.json").read_text(encoding="utf-8"))
-    for exp, lang, condition in contract["cells"]:
-        stem = f"{exp}__multilingual_e5_large__{lang}__{condition}"
-        path = ROOT / "embeddings" / exp / f"{stem}.npy"
-        if sha256(path) != evaluation["sources"][stem]["sha256_npy_current"]:
-            raise RuntimeError(f"Historical NPY hash mismatch: {path}")
-        payload.append(path)
     manifest = {"schema_version": 1, "commit": commit,
                 "source_sha256": {name: sha256(ROOT / name) for name in tracked},
                 "payload": [{"path": p.relative_to(ROOT).as_posix(), "bytes": p.stat().st_size,
                              "sha256": sha256(p)} for p in payload],
-                "full_run_authorized": False}
+                "full_run_authorized": False, "execution_scope": "INFERENCE_ONLY_LOCAL_VALIDATION"}
     with tempfile.TemporaryDirectory(dir=output) as temp:
         bundle = Path(temp) / "repo.bundle"
         git("bundle", "create", str(bundle), "HEAD")

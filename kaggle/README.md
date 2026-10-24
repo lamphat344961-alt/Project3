@@ -1,14 +1,21 @@
-# Chạy E5 Chặng 02 trên Kaggle
+# Kaggle chỉ sinh embeddings E5 — Chặng 02
 
-1. Tạo **Private Dataset** từ `paac_vn_stage02_kaggle.zip`. Gói chứa code ở đúng commit, hai Parquet đã freeze và đủ sáu NPY lịch sử; không cần clone GitHub hay tự tìm thêm file.
-2. Tạo Notebook → **File → Import Notebook** → chọn `PAAC_VN_Stage02_Kaggle.ipynb`. Thêm dataset vừa tạo bằng **Add Input**. Bật **Accelerator → GPU** và **Internet**. Notebook dùng `cuda:0` kể cả khi có hai GPU.
-3. Chạy từ đầu qua phần smoke. Không cần sửa đường dẫn khi chỉ gắn một gói input. Notebook cài dependency trong venv riêng, giữ PyTorch CUDA của Kaggle, rồi chạy preflight → smoke hai lần encode trên sáu cells. `READY_FOR_SMOKE` là preflight; `SMOKE_PASS` mới là smoke đạt.
-4. Tải `stage02_smoke_results.zip` từ Output `/kaggle/working/`. ZIP chứa receipts, log, môi trường, token audit và hai lượt vectors smoke. Xem bảng max absolute difference trong notebook; gửi smoke receipt để tác giả quyết định full.
-5. **Chỉ sau khi được tác giả phê duyệt full**, điền tên người duyệt và tham chiếu phê duyệt trong cell “Phê duyệt full”, đổi `AUTHOR_APPROVED_FULL=True`, rồi chạy lại hai code cells cuối. Notebook tạo authorization riêng gắn đúng smoke và chạy full; không sửa contract hoặc đổi package/GPU giữa smoke và full. Nếu chưa được duyệt, giữ False: “Run All” sẽ bỏ qua full.
-6. Khi full đạt, tải `stage02_full_results.zip` từ Output. Gồm sáu embeddings mới, row sidecars, metadata, historical comparisons và receipts. Không tải cache checkpoint hoặc venv.
+1. Upload `paac_vn_stage02_kaggle.zip` thành **Private Dataset**. Gói có code đúng commit và **hai Parquet đầu vào**; không cần NPY lịch sử.
+2. Import `PAAC_VN_Stage02_Kaggle.ipynb`, Add Input dataset vừa tạo, bật **GPU + Internet**.
+3. Sau khi tác giả phê duyệt chạy đủ sáu cells, điền `APPROVED_BY`, `APPROVAL_REFERENCE`, đặt `AUTHOR_APPROVED_FULL=True` ở cell đầu rồi **Run All**. Giữ False nếu chưa được duyệt: không chạy inference. Không sửa contract.
+4. Tải **`stage02_embeddings.zip`** từ Output `/kaggle/working/` về local. Nếu inference lỗi, ZIP chứa phần đã lưu cùng log; trạng thái hoàn thành đủ sáu cells phải là `INFERENCE_COMPLETE_UNVALIDATED`.
 
-Giữ nguyên session sau smoke để dùng cùng runtime. Nếu session mất, cần chạy lại setup/smoke trong session mới; không dùng smoke từ GPU/package khác. Nếu smoke OOM hoặc gặp lỗi deterministic op, tải log/receipt rồi gửi lại; không tự giảm batch, dùng FP16 hay tắt deterministic flags. Các lần chạy sử dụng run IDs mới, không ghi đè kết quả cũ.
+Mỗi cell xuất:
 
-Notebook chưa được chạy trên Kaggle trong phiên local. Local đã kiểm tra cú pháp, đóng gói/khôi phục đúng commit và đầu vào; GPU smoke/full phải thực hiện tại Kaggle. Để dựng lại gói từ checkout: `python -m pipeline.package_e5_kaggle --output-dir <thu_muc_moi>`.
+- `<cell>.npy`: embeddings theo đúng thứ tự app ban đầu.
+- `<cell>.app_ids.json`: danh sách app IDs theo thứ tự hàng NPY.
+- `<cell>.rows.parquet`: row_idx, appId, genreId.
+- `<cell>.json`: recipe, runtime, prepared-text/batch-order/input hashes, source commit và trạng thái `PENDING_LOCAL`.
 
-Tham khảo giao diện: [Kaggle Notebooks](https://www.kaggle.com/docs/notebooks). Môi trường GPU dùng PyTorch có sẵn trong image; notebook lưu phiên bản thực tế và không nhận bản CPU làm GPU runtime.
+ZIP còn có execution metadata, checkpoint asset hashes, môi trường và log. Hai TN1 cells có 23,883 apps/cell; bốn TN2 cells có 13,657 apps/cell. Sáu cells encode riêng; giữ FP32, batch8, cap512, query prefix, masked mean pooling và char_budget950 như contract.
+
+**Kaggle không chạy smoke comparison, token-equality audit, validation vectors, historical comparison, clustering hoặc thống kê.** Thực hiện các bước này tại local sau khi tải ZIP; `INFERENCE_COMPLETE_UNVALIDATED` chỉ nghĩa là đã xuất xong, không phải kết quả đã được nghiệm thu. Các guards nhỏ về input hashes/IDs, runtime và ghi file vẫn giữ để tránh dùng nhầm dữ liệu hoặc ghi đè.
+
+Notebook dùng PyTorch GPU sẵn có của Kaggle, cài dependencies riêng và ghi phiên bản thực tế. Không đổi GPU/package/precision/batch giữa chừng. Khi lỗi, tải ZIP/log rồi xử lý; không tự giảm batch hoặc chuyển CPU. Nếu session mất, dùng run ID mới, không ghi đè kết quả đã có.
+
+Dựng lại artifact: `python -m pipeline.package_e5_kaggle --output-dir <thu_muc_moi>`. Bản giao mới ở `output/kaggle_inference/`; gói cũ có historical NPY không còn là đầu vào cần dùng.
