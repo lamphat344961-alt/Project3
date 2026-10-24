@@ -7,3 +7,4 @@ __pycache__/
 *.py[cod]
 output/kaggle/
 output/kaggle_inference/
+.venv-labse-local/

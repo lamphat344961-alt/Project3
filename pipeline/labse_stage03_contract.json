@@ -1,6 +1,7 @@
 {
   "schema_version": 1,
-  "status": "PROPOSED_FOR_AUTHOR_AND_CLAUDE_REVIEW",
+  "status": "AUTHOR_APPROVED_CHECKPOINT_AND_FOUR_CELLS",
+  "author_approval_reference": "User instruction in current conversation, 2026-10-24: accepts proposed LaBSE checkpoint and four cells; requests real checkpoint verification and local inference preparation",
   "model_id": "sentence-transformers/LaBSE",
   "revision": "836121a0533e5664b21c7aacc5d22951f2b8b25b",
   "dimension": 768,
