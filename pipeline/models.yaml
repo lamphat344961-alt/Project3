@@ -1,0 +1,214 @@
+schema_version: 1
+project: PAAC-VN
+seed: 42
+
+# Runtime rule:
+# - clustering_prefix is the prefix actually prepended for this project's clustering embeddings.
+# - query_prefix/doc_prefix document the model's canonical asymmetric-retrieval convention.
+# - max_len is the effective native input-token budget used by PAAC-VN, including special tokens.
+# - revision is frozen to a concrete Hugging Face commit where applicable.
+# - audit_limiter=true identifies the 256-token PhoBERT-family models used to choose TN1 N_CHARS.
+
+representations:
+  tfidf_lsa:
+    display_name: "TF-IDF -> SVD 300"
+    tn1: true
+    tn2: true
+    backend: sklearn
+    hf_name: "local:scikit-learn/TfidfVectorizer+TruncatedSVD"
+    revision: "paac-vn-tfidf-v1"
+    max_len: -1
+    pooling: "svd300_then_l2"
+    needs_word_segmentation: false
+    tokenizer_use_fast: false
+    query_prefix: ""
+    doc_prefix: ""
+    clustering_prefix: ""
+    dim: 300
+    license: "BSD-3-Clause (scikit-learn implementation)"
+    year: 1990
+    params: "non-parametric"
+    training_objective: "TF-IDF lexical weighting + latent semantic analysis (TruncatedSVD)"
+    model_family: "lexical_lsa"
+    audit_limiter: false
+    vectorizer:
+      analyzer: "word"
+      ngram_range: [1, 2]
+      min_df: 5
+      max_df: 0.5
+      sublinear_tf: true
+      norm: "l2"
+      lowercase: true
+      token_pattern: '(?u)\b\w\w+\b'
+    svd:
+      n_components: 300
+      random_state: 42
+      l2_normalize_after: true
+
+  phobert_base_v2:
+    display_name: "PhoBERT-base-v2"
+    tn1: true
+    tn2: false
+    backend: transformers
+    hf_name: "vinai/phobert-base-v2"
+    revision: "86cd7fd4c148980922ac11a2cf5e257f2ba639e1"
+    max_len: 256
+    pooling: "mean_attention_mask"
+    needs_word_segmentation: true
+    tokenizer_use_fast: false
+    query_prefix: ""
+    doc_prefix: ""
+    clustering_prefix: ""
+    dim: 768
+    license: "AGPL-3.0"
+    year: 2023
+    params: "135M"
+    training_objective: "masked language modeling; PhoBERT-base-v2 continued pretraining checkpoint"
+    model_family: "roberta_mlm_monolingual_vi"
+    audit_limiter: true
+    batch_size_hint: 64
+
+  videberta_base:
+    display_name: "ViDeBERTa-base"
+    tn1: true
+    tn2: false
+    backend: transformers
+    hf_name: "Fsoft-AIC/videberta-base"
+    revision: "a27c8175098cc2b2b55585763fe26c60b117804c"
+    max_len: 512
+    pooling: "mean_attention_mask"
+    needs_word_segmentation: true
+    tokenizer_use_fast: true
+    query_prefix: ""
+    doc_prefix: ""
+    clustering_prefix: ""
+    dim: 768
+    license: "Not stated on HF checkpoint; official ViDeBERTa source repository is MIT"
+    year: 2023
+    params: "86M backbone"
+    training_objective: "DeBERTaV3 self-supervision: MLM + RTD with GDES"
+    model_family: "deberta_v3_pretrained_monolingual_vi"
+    audit_limiter: false
+    batch_size_hint: 32
+    note: "Pretraining pipeline applies PyVi word/sentence segmentation before SentencePiece; PAAC-VN mirrors that preprocessing."
+
+  sup_simcse_phobert:
+    display_name: "Sup-SimCSE-PhoBERT"
+    tn1: true
+    tn2: false
+    backend: transformers
+    hf_name: "VoVanPhuc/sup-SimCSE-VietNamese-phobert-base"
+    revision: "608779b86741a8acd8c8d38132974ff04086b138"
+    max_len: 256
+    pooling: "pooler_output"
+    needs_word_segmentation: true
+    tokenizer_use_fast: false
+    query_prefix: ""
+    doc_prefix: ""
+    clustering_prefix: ""
+    dim: 768
+    license: "Not stated on HF checkpoint; upstream SimeCSE_Vietnamese repository is MIT"
+    year: 2021
+    params: "135M"
+    training_objective: "supervised SimCSE contrastive learning"
+    model_family: "phobert_supervised_simcse"
+    audit_limiter: true
+    batch_size_hint: 64
+    note: "Use the author's documented AutoModel(...).pooler_output recipe, not ad-hoc mean pooling."
+
+  bkai_vietnamese_biencoder:
+    display_name: "BKAI Vietnamese Bi-Encoder"
+    tn1: true
+    tn2: false
+    backend: transformers
+    hf_name: "bkai-foundation-models/vietnamese-bi-encoder"
+    revision: "84f9d9ada0d1a3c37557398b9ae9fcedcdf40be0"
+    max_len: 256
+    pooling: "mean_attention_mask"
+    needs_word_segmentation: true
+    tokenizer_use_fast: false
+    query_prefix: ""
+    doc_prefix: ""
+    clustering_prefix: ""
+    dim: 768
+    license: "Apache-2.0"
+    year: 2024
+    params: "135M PhoBERT-base-v2 backbone"
+    training_objective: "MultipleNegativesRankingLoss with cosine similarity"
+    model_family: "phobert_biencoder_vi"
+    audit_limiter: true
+    batch_size_hint: 64
+    note: "Model card requires already word-segmented input for local Sentence-Transformers/Transformers usage."
+
+  multilingual_e5_large:
+    display_name: "multilingual-e5-large"
+    tn1: true
+    tn2: true
+    backend: transformers
+    hf_name: "intfloat/multilingual-e5-large"
+    revision: "3d7cfbdacd47fdda877c5cd8a79fbcc4f2a574f3"
+    max_len: 512
+    pooling: "mean_attention_mask"
+    needs_word_segmentation: false
+    tokenizer_use_fast: true
+    query_prefix: "query: "
+    doc_prefix: "passage: "
+    clustering_prefix: "query: "
+    dim: 1024
+    license: "MIT"
+    year: 2024
+    params: "0.6B"
+    training_objective: "multilingual contrastive text-embedding training"
+    model_family: "xlm_roberta_biencoder_multilingual"
+    audit_limiter: false
+    batch_size_hint: 16
+    note: "Official FAQ recommends query: when embeddings are used as features, including clustering."
+
+  bge_m3:
+    display_name: "BGE-M3"
+    tn1: true
+    tn2: true
+    backend: transformers
+    hf_name: "BAAI/bge-m3"
+    revision: "5617a9f61b028005a4858fdac845db406aefb181"
+    max_len: 8192
+    pooling: "cls"
+    needs_word_segmentation: false
+    tokenizer_use_fast: true
+    query_prefix: ""
+    doc_prefix: ""
+    clustering_prefix: ""
+    dim: 1024
+    license: "MIT"
+    year: 2024
+    params: "0.6B class"
+    training_objective: "multilingual multi-function embedding training (dense + sparse + ColBERT)"
+    model_family: "xlm_roberta_multifunction_embedding"
+    audit_limiter: false
+    dense_only: true
+    batch_size_hint: 4
+    note: "PAAC-VN uses only the dense representation; Sentence-Transformers pooling config is CLS."
+
+  qwen3_embedding_0_6b:
+    display_name: "Qwen3-Embedding-0.6B"
+    tn1: true
+    tn2: true
+    backend: transformers
+    hf_name: "Qwen/Qwen3-Embedding-0.6B"
+    revision: "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3"
+    max_len: 32768
+    pooling: "last_token"
+    needs_word_segmentation: false
+    tokenizer_use_fast: true
+    query_prefix: "Instruct: {task_description}\nQuery:"
+    doc_prefix: ""
+    clustering_prefix: ""
+    dim: 1024
+    license: "Apache-2.0"
+    year: 2025
+    params: "0.6B"
+    training_objective: "instruction-aware contrastive embedding training with Matryoshka representation learning"
+    model_family: "qwen3_decoder_embedding"
+    audit_limiter: false
+    batch_size_hint: 2
+    note: "No instruction is added to documents; official pooling is last-token. Native capacity is 32768."
