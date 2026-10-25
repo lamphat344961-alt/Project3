@@ -186,7 +186,7 @@ def combine(out,remaining,probe):
         require(embed.sha256(RESULTS/run_id/'execution_receipt.json')==digest,'Prior probe receipt changed')
         for name,h in r['artifacts_sha256'].items():
             require(embed.sha256(RESULTS/run_id/name)==h,'Prior probe model changed')
-    old=pd.read_csv(old_probe/'probe_comparison.csv').rename(columns={'model':'representation'})
+    old=pd.read_csv(old_probe/'probe_comparison.csv').rename(columns={'model':'representation','majority_macro_f1':'majority_test_macro_f1'})
     old['representation']=old.representation.replace({'e5':'multilingual_e5_large'})
     new=pd.read_csv(probe/'probe_summary.csv')
     probes=pd.concat([old,new],ignore_index=True)
