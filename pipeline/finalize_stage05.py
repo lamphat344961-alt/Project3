@@ -191,6 +191,9 @@ def combine(out,remaining,probe):
     new=pd.read_csv(probe/'probe_summary.csv')
     probes=pd.concat([old,new],ignore_index=True)
     require(len(probes)==26 and not probes.duplicated(['representation','cell']).any(),'Complete26 probe cells')
+    expected_probes={(rep,'tn1:vi:'+condition) for rep in ('labse','multilingual_e5_large','tfidf_lsa_train_only','phobert_base_v2','sup_simcse_phobert','bkai_vietnamese_biencoder','bge_m3','qwen3_embedding_0_6b') for condition in ('char_budget','native')}
+    expected_probes|={(rep,'tn2:'+lang+':native') for rep in ('labse','multilingual_e5_large','tfidf_lsa_train_only','bge_m3','qwen3_embedding_0_6b') for lang in ('en','vi')}
+    require(set(zip(probes.representation,probes.cell))==expected_probes,'Probe recipe/cohort coverage')
     probes.to_csv(out/'probe_all.csv',index=False)
     retrieval=[]
     partition=[]
@@ -205,6 +208,27 @@ def combine(out,remaining,probe):
     require(len(retrieval)==18 and len(partition)==9,'All paired evaluation coverage')
     pd.DataFrame(retrieval).to_csv(out/'retrieval_all.csv',index=False)
     pd.DataFrame(partition).to_csv(out/'partition_all.csv',index=False)
+    index=[]
+    for exp,rep,lang,condition in sorted(expected):
+        stem='__'.join([exp,rep,lang,condition])
+        if rep=='labse':
+            base=ROOT/'results/labse_stage03'/('labse_local_20261024_204813_'+'_'.join([exp,lang,condition]))/stem
+            label=RESULTS/'labse_20261025_001'/(':'.join([exp,lang,condition]).replace(':','__')+'__kmeans_main.npz')
+        elif rep=='multilingual_e5_large':
+            run_id='kg_20261025_022156_432511_tn1_034318_693554' if exp=='tn1' else 'kg_20261025_022156_432511_tn2_022259_065085'
+            base=ROOT/'results/e5_stage02'/run_id/stem
+            label=RESULTS/('e5_'+exp+'_20261025_001')/(':'.join([exp,lang,condition]).replace(':','__')+'__kmeans_main.npz')
+        else:
+            base=ROOT/'embeddings'/exp/stem
+            label=ROOT/'results/labels'/(stem+'__kmeans_main.npz')
+        meta=read(base.with_suffix('.json'))
+        index.append(dict(experiment=exp,representation=rep,language=lang,condition=condition,
+            embedding_path=base.with_suffix('.npy').relative_to(ROOT).as_posix(),embedding_sha256=embed.sha256(base.with_suffix('.npy')),
+            rows_sha256=embed.sha256(base.with_suffix('.rows.parquet')),metadata_sha256=embed.sha256(base.with_suffix('.json')),
+            labels_path=label.relative_to(ROOT).as_posix(),labels_sha256=embed.sha256(label),
+            dimension=meta.get('embedding_dim',meta.get('recipe',{}).get('dim',meta.get('checkpoint',{}).get('config_summary',{}).get('dimension'))),
+            revision=meta.get('revision',meta.get('recipe',{}).get('revision')),k=49,n_init=10,seeds='42-51'))
+    pd.DataFrame(index).to_csv(out/'artifact_index.csv',index=False)
     return dict(n_taxonomy_cells=34,n_taxonomy_seed_rows=340,n_provenance_rows=480,n_probe_cells=26,n_paired_conditions=9,
         n_total_retrieval_queries=245826,n_total_partition_pairs=1710,
         interpretations=['Recipe/input-condition comparisons, not causal model-quality effects.','TN2 entirely translation-flagged; no extrapolation to independently authored translations.','S and seed SD descriptive; no iid pair bootstrap or population confidence interval.','TF-IDF historical clustering/retrieval transductive; probe TF-IDF train-only fit.','Historical neural compute precision not recorded in some metadata; no assumption all compute FP32.'])
@@ -233,7 +257,9 @@ def main():
             print('VERIFY REMAINING PROBES',flush=True)
             verify_remaining_probes(legacy,probe)
             receipt.update(combine(out,remaining,probe))
-        receipt.update(status='STAGE05_COMPLETE_VALIDATED',input_receipts_sha256={str(p.relative_to(ROOT)):embed.sha256(p) for p in [remaining/'execution_receipt.json',probe/'execution_receipt.json']})
+        parents=[remaining/'execution_receipt.json',probe/'execution_receipt.json',RESULTS/'lexical_lineage_20261025_001/execution_receipt.json',RESULTS/'validation_probes_20261025_001/validation_receipt.json']
+        parents.extend(RESULTS/run/'execution_receipt.json' for run in ('labse_20261025_001','e5_tn1_20261025_001','e5_tn2_20261025_001'))
+        receipt.update(status='STAGE05_COMPLETE_VALIDATED',input_receipts_sha256={str(p.relative_to(ROOT)):embed.sha256(p) for p in parents})
     except Exception as exc:
         receipt.update(status='FAILED',error=f'{type(exc).__name__}: {exc}')
         raise
