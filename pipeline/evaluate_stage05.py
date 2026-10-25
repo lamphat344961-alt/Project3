@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 VALIDATION = ROOT / 'results/labse_stage03/validation_local_001/validation_receipt.json'
 INPUT_PREFIX = 'labse_local_20261024_204813_'
 E5_VALIDATION = ROOT / 'results/e5_stage02/validation_tn2_20261025_001/validation_receipt.json'
+E5_TN1_VALIDATION = ROOT / 'results/e5_stage02/validation_tn1_20261025_001/validation_receipt.json'
 
 
 def write_json(path, value):
@@ -80,9 +81,17 @@ def load_validated():
 
 
 def load_validated_e5_tn2():
-    validation = json.loads(E5_VALIDATION.read_text(encoding='utf-8'))
-    if validation['status'] != 'E5_TN2_LOCAL_ARTIFACT_VALIDATION_PASS':
-        raise ValueError('E5 TN2 validation is not PASS')
+    return load_validated_e5(E5_VALIDATION, 'tn2')
+
+
+def load_validated_e5_tn1():
+    return load_validated_e5(E5_TN1_VALIDATION, 'tn1')
+
+
+def load_validated_e5(validation_path, experiment):
+    validation = json.loads(validation_path.read_text(encoding='utf-8'))
+    if validation['status'] != 'E5_'+experiment.upper()+'_LOCAL_ARTIFACT_VALIDATION_PASS':
+        raise ValueError('E5 validation is not PASS')
     frames = load_inputs(load_contract())
     folder = ROOT / 'results/e5_stage02' / validation['run_id']
     if embed.sha256(folder/'execution_receipt.json') != validation['execution_receipt_sha256']:
@@ -96,11 +105,13 @@ def load_validated_e5_tn2():
         base = folder / '__'.join([exp,'multilingual_e5_large',lang,condition])
         rows = pd.read_parquet(base.with_suffix('.rows.parquet'))
         x = np.load(base.with_suffix('.npy'),mmap_mode='r',allow_pickle=False)
-        if x.shape != (13657,1024) or rows.appId.tolist()!=frames['tn2'].appId.tolist() or rows.genreId.tolist()!=frames['tn2'].genreId.tolist():
-            raise ValueError('E5 TN2 shape/mapping mismatch')
+        if exp != experiment or x.shape != (len(frames[exp]),1024) or rows.appId.tolist()!=frames[exp].appId.tolist() or rows.genreId.tolist()!=frames[exp].genreId.tolist():
+            raise ValueError('E5 shape/mapping mismatch')
         inputs[':'.join(item['cell'])] = x
-    if set(inputs) != {'tn2:'+lang+':'+condition for lang in ('en','vi') for condition in ('native','token_budget')}:
-        raise ValueError('E5 TN2 four-cell scope mismatch')
+    expected = ({'tn2:'+lang+':'+condition for lang in ('en','vi') for condition in ('native','token_budget')}
+                if experiment=='tn2' else {'tn1:vi:char_budget','tn1:vi:native'})
+    if set(inputs) != expected:
+        raise ValueError('E5 cell scope mismatch')
     return inputs, frames
 
 
@@ -127,7 +138,8 @@ def evaluate_pair(out, en_vectors, vi_vectors, en_labels, vi_labels, frame):
 
 
 def run(out, model='labse'):
-    inputs, frames = load_validated() if model=='labse' else load_validated_e5_tn2()
+    inputs, frames = (load_validated() if model=='labse' else
+                      load_validated_e5_tn2() if model=='e5_tn2' else load_validated_e5_tn1())
     labels, alignment = {}, []
     for cell, x in inputs.items():
         print('CLUSTER ' + model + ' ' + cell, flush=True)
@@ -141,7 +153,7 @@ def run(out, model='labse'):
         for seed, partition in zip(cluster.SEEDS, pred):
             alignment.append(dict(cell=cell, seed=seed, n_apps=len(y), **metrics.external_scores(y, partition)))
     pd.DataFrame(alignment).to_csv(out / 'taxonomy_by_seed.csv', index=False)
-    conditions = ('native',) if model=='labse' else ('native','token_budget')
+    conditions = ('native',) if model=='labse' else ('native','token_budget') if model=='e5_tn2' else ()
     for condition in conditions:
         pair_out = out if model=='labse' else out/condition
         if model!='labse':
@@ -149,7 +161,7 @@ def run(out, model='labse'):
         print('PAIRED EVALUATION ' + model + ' ' + condition,flush=True)
         evaluate_pair(pair_out, inputs['tn2:en:'+condition],inputs['tn2:vi:'+condition],
                       labels['tn2:en:'+condition],labels['tn2:vi:'+condition],frames['tn2'])
-    if model!='labse':
+    if model=='e5_tn2':
         return {'n_cells':4,'n_kmeans_fits':40,'retrieval_queries':54628,
                 'probe_status':'NOT_EXECUTED','scope':'E5 TN2 four separate cells; no TN1 or reuse; no agglomerative/n_init1 diagnostic/R02'}
     strata = []
@@ -163,14 +175,14 @@ def run(out, model='labse'):
                     n_genres=int(len(np.unique(y))), ami=float(adjusted_mutual_info_score(y, partition[mask])),
                     ari=float(adjusted_rand_score(y, partition[mask])), interpretation='Fixed full-cohort partitions restricted to observed provenance stratum; not refitted'))
     pd.DataFrame(strata).to_csv(out / 'provenance_taxonomy_by_seed.csv', index=False)
-    return {'n_cells': len(inputs), 'n_kmeans_fits': 40, 'retrieval_queries': 27314,
-            'probe_status': 'PENDING_SPLIT_DECISION', 'scope': 'LaBSE KMeans main n_init10; no agglomerative, n_init1 diagnostic, other models or R02 results implied'}
+    return {'n_cells': len(inputs), 'n_kmeans_fits': len(inputs)*10, 'retrieval_queries': 27314 if model=='labse' else 0,
+            'probe_status': 'NOT_EXECUTED_BY_THIS_COMMAND', 'scope': model+' KMeans main n_init10 and TN1 provenance; no agglomerative, n_init1 diagnostic or R02 results implied'}
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('run_id')
-    parser.add_argument('--model', choices=['labse','e5_tn2'],default='labse')
+    parser.add_argument('--model', choices=['labse','e5_tn2','e5_tn1'],default='labse')
     args = parser.parse_args()
     if not args.run_id or any(c not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-' for c in args.run_id):
         raise ValueError('Invalid run ID')
@@ -181,12 +193,13 @@ def main():
     receipt = dict(started_at_utc=datetime.now(timezone.utc).isoformat(),
         commit=subprocess.check_output(['git','rev-parse','HEAD'], cwd=ROOT,text=True).strip(),
         code_sha256={p: embed.sha256(ROOT / p) for p in files},
-        model=args.model, validation_receipt_sha256=embed.sha256(VALIDATION if args.model=='labse' else E5_VALIDATION), packages=embed.package_versions(),
+        model=args.model, validation_receipt_sha256=embed.sha256({'labse':VALIDATION,'e5_tn2':E5_VALIDATION,'e5_tn1':E5_TN1_VALIDATION}[args.model]), packages=embed.package_versions(),
         threads=4, protocol={'k':49,'n_init':10,'seeds':cluster.SEEDS,'input_vectors':'frozen float32 L2, no PCA/scaling/refit'})
     try:
         with threadpool_limits(limits=4):
             receipt.update(run(out,args.model))
-        receipt['status'] = ('LABSE' if args.model=='labse' else 'E5_TN2') + '_CLUSTERING_RETRIEVAL_CORRESPONDENCE_COMPLETE'
+        receipt['status'] = ('E5_TN1_CLUSTERING_PROVENANCE_COMPLETE' if args.model=='e5_tn1' else
+                             ('LABSE' if args.model=='labse' else 'E5_TN2') + '_CLUSTERING_RETRIEVAL_CORRESPONDENCE_COMPLETE')
     except Exception as exc:
         receipt.update(status='FAILED', error=f'{type(exc).__name__}: {exc}')
         raise

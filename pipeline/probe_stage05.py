@@ -1,4 +1,4 @@
-"""Frozen LaBSE logistic probe using an explicitly approved prepared split."""
+"""Frozen LaBSE/E5 logistic probe using the approved prepared split."""
 from __future__ import annotations
 import argparse
 import json
@@ -13,7 +13,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, confusion_matrix, f1_score, precision_recall_fscore_support
 from threadpoolctl import threadpool_limits
 from pipeline import embed
-from pipeline.evaluate_stage05 import ROOT, load_validated
+from pipeline.evaluate_stage05 import ROOT, load_validated, load_validated_e5_tn1, load_validated_e5_tn2, VALIDATION, E5_VALIDATION, E5_TN1_VALIDATION
 
 C_GRID = (0.01, 0.1, 1.0, 10.0, 100.0)
 
@@ -50,6 +50,7 @@ def fit_select(x, y, split, class_labels):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('run_id')
+    parser.add_argument('--model',choices=['labse','e5'],default='labse')
     parser.add_argument('--split-proposal', type=Path, required=True)
     parser.add_argument('--approved-by', required=True)
     parser.add_argument('--approval-reference', required=True)
@@ -69,7 +70,16 @@ def main():
     folds = pd.read_parquet(args.split_proposal.parent/'proposed_app_folds.parquet')
     if folds.appId.duplicated().any() or folds.groupby('component').split.nunique().max() != 1 or folds.groupby('developerId').split.nunique().max() != 1:
         raise ValueError('Split leaks developer/component')
-    inputs, frames = load_validated()
+    if args.model=='labse':
+        inputs, frames = load_validated()
+        input_validation = [VALIDATION]
+    else:
+        inputs,frames = load_validated_e5_tn1()
+        paired,_ = load_validated_e5_tn2()
+        # Approved probe scope: TN1 VI char/native; TN2 EN/VI native.
+        # No additional T512 classifier runs or inferred probe artifacts.
+        inputs.update({k:v for k,v in paired.items() if k.endswith(':native')})
+        input_validation = [E5_TN1_VALIDATION,E5_VALIDATION]
     for exp, expected in proposal['dataset_sha256'].items():
         from pipeline.labse_stage03 import load_contract
         if embed.sha256(ROOT/load_contract()['datasets'][exp]['path']) != expected:
@@ -79,7 +89,8 @@ def main():
     receipt = dict(status='RUNNING', approved_by=args.approved_by, approval_reference=args.approval_reference,
         split_proposal_sha256=embed.sha256(args.split_proposal), code_sha256=embed.sha256(Path(__file__)),
         commit=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(), packages=embed.package_versions(),
-        scope='Four frozen LaBSE cells only; majority baseline; no lexical baseline, PCA sensitivity or learning curve implied')
+        model=args.model,input_validation_sha256={p.relative_to(ROOT).as_posix():embed.sha256(p) for p in input_validation},
+        scope='Four frozen '+args.model+' cells: TN1 VI char/native, TN2 EN/VI native; majority baseline; no T512 probe, lexical baseline, PCA sensitivity or learning curve implied')
     summaries = []
     try:
         classes = sorted(frames['tn1'].genreId.unique())
@@ -103,7 +114,7 @@ def main():
             with base.with_suffix('.model.npz').open('xb') as handle:
                 np.savez_compressed(handle,coef=model.coef_,intercept=model.intercept_,classes=model.classes_)
             embed.write_json_create_only(base.with_suffix('.json'),summary)
-        receipt.update(status='FOUR_LABSE_PROBES_COMPLETE',cells=summaries)
+        receipt.update(status='FOUR_'+args.model.upper()+'_PROBES_COMPLETE',cells=summaries)
     except Exception as exc:
         receipt.update(status='FAILED',error=f'{type(exc).__name__}: {exc}',cells=summaries)
         raise
