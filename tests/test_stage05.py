@@ -21,6 +21,20 @@ class Stage05Tests(unittest.TestCase):
         frame = pd.DataFrame({'text_source':['machine','human','unknown',None]})
         self.assertEqual(provenance_labels(frame).tolist(), ['translation-flagged','not-flagged','unknown','unknown'])
 
+    def test_probe_selection_does_not_read_test_labels(self):
+        from pipeline.probe_stage05 import fit_select
+        rng = np.random.default_rng(42)
+        x = rng.normal(size=(36,4))
+        y = np.tile(np.arange(3),12)
+        split = np.repeat(['train','validation','test'],12)
+        _, pred1, a = fit_select(x,y,split,[0,1,2])
+        changed = y.copy()
+        changed[split=='test'] = (changed[split=='test']+1)%3
+        _, pred2, b = fit_select(x,changed,split,[0,1,2])
+        self.assertEqual(a['tuning'],b['tuning'])
+        self.assertEqual(a['selected_C'],b['selected_C'])
+        np.testing.assert_array_equal(pred1,pred2)
+
 
 if __name__ == '__main__':
     unittest.main()
