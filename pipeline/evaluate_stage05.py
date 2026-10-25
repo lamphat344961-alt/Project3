@@ -1,4 +1,4 @@
-"""Stage05 evaluation of validated LaBSE outputs, without embedding inference."""
+"""Stage05 evaluation of validated LaBSE or TN2 E5, without embedding inference."""
 from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
@@ -19,6 +19,7 @@ from pipeline.labse_stage03 import load_contract, load_inputs
 ROOT = Path(__file__).resolve().parents[1]
 VALIDATION = ROOT / 'results/labse_stage03/validation_local_001/validation_receipt.json'
 INPUT_PREFIX = 'labse_local_20261024_204813_'
+E5_VALIDATION = ROOT / 'results/e5_stage02/validation_tn2_20261025_001/validation_receipt.json'
 
 
 def write_json(path, value):
@@ -78,11 +79,58 @@ def load_validated():
     return inputs, frames
 
 
-def run(out):
-    inputs, frames = load_validated()
+def load_validated_e5_tn2():
+    validation = json.loads(E5_VALIDATION.read_text(encoding='utf-8'))
+    if validation['status'] != 'E5_TN2_LOCAL_ARTIFACT_VALIDATION_PASS':
+        raise ValueError('E5 TN2 validation is not PASS')
+    frames = load_inputs(load_contract())
+    folder = ROOT / 'results/e5_stage02' / validation['run_id']
+    if embed.sha256(folder/'execution_receipt.json') != validation['execution_receipt_sha256']:
+        raise ValueError('E5 input receipt changed')
+    inputs = {}
+    for item in validation['cells']:
+        exp, lang, condition = item['cell']
+        for name, digest in item['artifacts_sha256'].items():
+            if embed.sha256(folder/name) != digest:
+                raise ValueError('E5 input artifact changed: '+name)
+        base = folder / '__'.join([exp,'multilingual_e5_large',lang,condition])
+        rows = pd.read_parquet(base.with_suffix('.rows.parquet'))
+        x = np.load(base.with_suffix('.npy'),mmap_mode='r',allow_pickle=False)
+        if x.shape != (13657,1024) or rows.appId.tolist()!=frames['tn2'].appId.tolist() or rows.genreId.tolist()!=frames['tn2'].genreId.tolist():
+            raise ValueError('E5 TN2 shape/mapping mismatch')
+        inputs[':'.join(item['cell'])] = x
+    if set(inputs) != {'tn2:'+lang+':'+condition for lang in ('en','vi') for condition in ('native','token_budget')}:
+        raise ValueError('E5 TN2 four-cell scope mismatch')
+    return inputs, frames
+
+
+def evaluate_pair(out, en_vectors, vi_vectors, en_labels, vi_labels, frame):
+    pair_rows = agreement_rows(en_labels, vi_labels)
+    pd.DataFrame(pair_rows).to_csv(out / 'partition_pairs.csv', index=False)
+    write_json(out / 'partition_summary.json', summarize_agreement(pair_rows))
+    print('VECTOR CORRESPONDENCE', flush=True)
+    en = metrics.cosine_unit(en_vectors)
+    vi = metrics.cosine_unit(vi_vectors)
+    matched, negatives, delta = metrics.negative_pair_per_app(en, vi, chunk_rows=128)
+    paired = frame[['appId', 'genreId']].copy()
+    paired['matched_cosine'], paired['negative_cosine_median'], paired['delta_cosine'] = matched, negatives, delta
+    paired.to_parquet(out / 'paired_correspondence.parquet', index=False)
+    write_json(out / 'correspondence_summary.json', {name: {'mean': float(np.mean(values)), 'median': float(np.median(values))} for name, values in [('matched_cosine', matched), ('negative_cosine_median', negatives), ('delta_cosine', delta)]})
+    print('RETRIEVAL: exact tie-aware, full 13657-app catalogue in both directions', flush=True)
+    result = g1c_retrieval.evaluate_bidirectional(en_vectors, vi_vectors,
+        frame.appId.tolist(), frame.appId.tolist(), block_size=128,
+        expected_count=13657, expected_ordered_ids_sha256=embed.ordered_ids_sha256(frame.appId))
+    with (out / 'retrieval_per_query.jsonl').open('x', encoding='utf-8') as handle:
+        for row in result.pop('per_query'):
+            handle.write(json.dumps(row) + '\n')
+    write_json(out / 'retrieval_summary.json', result)
+
+
+def run(out, model='labse'):
+    inputs, frames = load_validated() if model=='labse' else load_validated_e5_tn2()
     labels, alignment = {}, []
     for cell, x in inputs.items():
-        print('CLUSTER ' + cell, flush=True)
+        print('CLUSTER ' + model + ' ' + cell, flush=True)
         pred, inertia, n_iter = cluster.run_kmeans_grid(x, cluster.MAIN_N_INIT)
         with (out / (cell.replace(':', '__') + '__kmeans_main.npz')).open('xb') as handle:
             np.savez_compressed(handle, seeds=cluster.SEEDS, labels=pred, inertia=inertia,
@@ -93,25 +141,17 @@ def run(out):
         for seed, partition in zip(cluster.SEEDS, pred):
             alignment.append(dict(cell=cell, seed=seed, n_apps=len(y), **metrics.external_scores(y, partition)))
     pd.DataFrame(alignment).to_csv(out / 'taxonomy_by_seed.csv', index=False)
-    pair_rows = agreement_rows(labels['tn2:en:native'], labels['tn2:vi:native'])
-    pd.DataFrame(pair_rows).to_csv(out / 'partition_pairs.csv', index=False)
-    write_json(out / 'partition_summary.json', summarize_agreement(pair_rows))
-    print('VECTOR CORRESPONDENCE', flush=True)
-    en = metrics.cosine_unit(inputs['tn2:en:native'])
-    vi = metrics.cosine_unit(inputs['tn2:vi:native'])
-    matched, negatives, delta = metrics.negative_pair_per_app(en, vi, chunk_rows=128)
-    paired = frames['tn2'][['appId', 'genreId']].copy()
-    paired['matched_cosine'], paired['negative_cosine_median'], paired['delta_cosine'] = matched, negatives, delta
-    paired.to_parquet(out / 'paired_correspondence.parquet', index=False)
-    write_json(out / 'correspondence_summary.json', {name: {'mean': float(np.mean(values)), 'median': float(np.median(values))} for name, values in [('matched_cosine', matched), ('negative_cosine_median', negatives), ('delta_cosine', delta)]})
-    print('RETRIEVAL: exact tie-aware, full 13657-app catalogue in both directions', flush=True)
-    result = g1c_retrieval.evaluate_bidirectional(inputs['tn2:en:native'], inputs['tn2:vi:native'],
-        frames['tn2'].appId.tolist(), frames['tn2'].appId.tolist(), block_size=128,
-        expected_count=13657, expected_ordered_ids_sha256=embed.ordered_ids_sha256(frames['tn2'].appId))
-    with (out / 'retrieval_per_query.jsonl').open('x', encoding='utf-8') as handle:
-        for row in result.pop('per_query'):
-            handle.write(json.dumps(row) + '\n')
-    write_json(out / 'retrieval_summary.json', result)
+    conditions = ('native',) if model=='labse' else ('native','token_budget')
+    for condition in conditions:
+        pair_out = out if model=='labse' else out/condition
+        if model!='labse':
+            pair_out.mkdir(exist_ok=False)
+        print('PAIRED EVALUATION ' + model + ' ' + condition,flush=True)
+        evaluate_pair(pair_out, inputs['tn2:en:'+condition],inputs['tn2:vi:'+condition],
+                      labels['tn2:en:'+condition],labels['tn2:vi:'+condition],frames['tn2'])
+    if model!='labse':
+        return {'n_cells':4,'n_kmeans_fits':40,'retrieval_queries':54628,
+                'probe_status':'NOT_EXECUTED','scope':'E5 TN2 four separate cells; no TN1 or reuse; no agglomerative/n_init1 diagnostic/R02'}
     strata = []
     provenance = provenance_labels(frames['tn1'])
     for cell in ('tn1:vi:char_budget', 'tn1:vi:native'):
@@ -130,28 +170,29 @@ def run(out):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('run_id')
+    parser.add_argument('--model', choices=['labse','e5_tn2'],default='labse')
     args = parser.parse_args()
     if not args.run_id or any(c not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-' for c in args.run_id):
         raise ValueError('Invalid run ID')
     out = ROOT / 'results/stage05' / args.run_id
     out.mkdir(parents=True, exist_ok=False)
     started = time.perf_counter()
-    files = ['pipeline/evaluate_stage05.py', 'pipeline/cluster.py', 'pipeline/evaluate_reviewed.py', 'pipeline/g1c_retrieval.py', 'pipeline/embed.py']
+    files = ['pipeline/evaluate_stage05.py', 'pipeline/cluster.py', 'pipeline/evaluate_reviewed.py', 'pipeline/g1c_retrieval.py', 'pipeline/embed.py', 'pipeline/labse_stage03.py', 'pipeline/labse_stage03_contract.json']
     receipt = dict(started_at_utc=datetime.now(timezone.utc).isoformat(),
         commit=subprocess.check_output(['git','rev-parse','HEAD'], cwd=ROOT,text=True).strip(),
         code_sha256={p: embed.sha256(ROOT / p) for p in files},
-        validation_receipt_sha256=embed.sha256(VALIDATION), packages=embed.package_versions(),
+        model=args.model, validation_receipt_sha256=embed.sha256(VALIDATION if args.model=='labse' else E5_VALIDATION), packages=embed.package_versions(),
         threads=4, protocol={'k':49,'n_init':10,'seeds':cluster.SEEDS,'input_vectors':'frozen float32 L2, no PCA/scaling/refit'})
     try:
         with threadpool_limits(limits=4):
-            receipt.update(run(out))
-        receipt['status'] = 'LABSE_CLUSTERING_RETRIEVAL_CORRESPONDENCE_COMPLETE'
+            receipt.update(run(out,args.model))
+        receipt['status'] = ('LABSE' if args.model=='labse' else 'E5_TN2') + '_CLUSTERING_RETRIEVAL_CORRESPONDENCE_COMPLETE'
     except Exception as exc:
         receipt.update(status='FAILED', error=f'{type(exc).__name__}: {exc}')
         raise
     finally:
         receipt['elapsed_seconds'] = time.perf_counter() - started
-        receipt['artifacts_sha256'] = {p.name:embed.sha256(p) for p in out.iterdir() if p.is_file()}
+        receipt['artifacts_sha256'] = {p.relative_to(out).as_posix():embed.sha256(p) for p in out.rglob('*') if p.is_file()}
         write_json(out / 'execution_receipt.json', receipt)
     print(json.dumps(receipt), flush=True)
 
