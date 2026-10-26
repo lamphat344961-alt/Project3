@@ -186,13 +186,25 @@ print('Dữ liệu sẵn sàng. Chạy riêng cell hình muốn xem hoặc chỉ
 def main():
     original=TARGET.read_bytes();old_sha=sha_bytes(original)
     nb=nbf.reads(original.decode('utf-8'),as_version=4)
-    if nb.metadata.get('paac_vn',{}).get('render_mode')=='INLINE_MATPLOTLIB':
+    mode=nb.metadata.get('paac_vn',{}).get('render_mode')
+    if mode=='INLINE_MATPLOTLIB_SCOPED':
         raise RuntimeError('Notebook already converted; do not overwrite author edits.')
+    repairing=mode=='INLINE_MATPLOTLIB'
     need_notes={c.id:c.source for c in nb.cells if 'author-notes' in c.metadata.get('tags',[])}
     tree=ast.parse(PLOT.read_text(encoding='utf-8'))
     drawings=drawing_cells(tree)
     if len(drawings)!=26:
         raise RuntimeError('Expected exactly 26 independent drawing blocks')
+    def unscoped_cell(slug):
+        return (f'# {slug}: code tạo đúng một hình từ figures_stage07.py.\n'
+                '# Chạy cell thiết lập chung trước; chỉnh lệnh vẽ bên dưới rồi chạy lại.\n'
+                'g = NotebookSources()  # reset drawing jitter; no file writes\n\n'+drawings[slug])
+    if repairing:
+        for cell in nb.cells:
+            if 'figure-drawing' in cell.metadata.get('tags',[]):
+                if cell.source!=unscoped_cell(cell.metadata.tags[1]):
+                    raise RuntimeError('Author drawing edits detected; preserve them before conversion.')
+    display_sha=nb.metadata.paac_vn['parent_notebook_sha256'] if repairing else old_sha
     nb.cells[0].source='''# PAAC-VN · Chặng07 · Code tạo từng hình và duyệt theo RQ
 
 **26 cell tạo hình Matplotlib trực tiếp**, giữ cả ý tưởng Codex/Claude. Mỗi cell có code vẽ được lấy từ `pipeline/figures_stage07.py`, không đọc ảnh PNG để thay cho việc vẽ.
@@ -208,15 +220,21 @@ def main():
 
 Đây là notebook duyệt, chưa chọn hình cuối cùng. Chỉ đọc dữ liệu, nhãn và metrics đã có để vẽ lại; không inference, refit hoặc chạy lại N05. Bộ hình chưa có panel riêng cho cosine correspondence hay hiệu năng theo provenance. R02 đã bỏ; không suy causal translation loss.
 '''
-    nb.cells.insert(1,nbf.v4.new_code_cell(setup_code(tree),metadata={'tags':['plot-setup']}))
+    if repairing:
+        next(c for c in nb.cells if 'plot-setup' in c.metadata.get('tags',[])).source=setup_code(tree)
+    else:
+        nb.cells.insert(1,nbf.v4.new_code_cell(setup_code(tree),metadata={'tags':['plot-setup']}))
     converted=[]
     for c in nb.cells:
         tags=c.metadata.get('tags',[])
-        if c.cell_type=='code' and 'figure-display' in tags:
+        if c.cell_type=='code' and ('figure-display' in tags or 'figure-drawing' in tags):
             slug=tags[1]
             c.source=(f'# {slug}: code tạo đúng một hình từ figures_stage07.py.\n'
                       '# Chạy cell thiết lập chung trước; chỉnh lệnh vẽ bên dưới rồi chạy lại.\n'
-                      'g = NotebookSources()  # reset drawing jitter; no file writes\n\n'+drawings[slug])
+                      '# Hàm trong cell giữ biến của hình này riêng, tránh ảnh hưởng hình khác.\n'
+                      'def draw_this_figure():\n'+textwrap.indent(
+                          'g = NotebookSources()  # reset drawing jitter; no file writes\n\n'+drawings[slug],'    ')
+                      +'\n\ndraw_this_figure()')
             c.metadata.tags=['figure-drawing',slug]
             c.metadata['source_module']='pipeline/figures_stage07.py'
             c.outputs=[];c.execution_count=None;converted.append(slug)
@@ -231,9 +249,9 @@ Không có lựa chọn cuối cùng được tự áp dụng, không khởi ch�
     for c in nb.cells:
         if c.cell_type=='code':
             c.outputs=[];c.execution_count=None
-    nb.metadata.paac_vn.update({'render_mode':'INLINE_MATPLOTLIB',
+    nb.metadata.paac_vn.update({'render_mode':'INLINE_MATPLOTLIB_SCOPED',
         'purpose':'Editable drawing cells plus author review; no scientific reruns',
-        'parent_notebook_sha256':old_sha,'previous_display_notebook':ARCHIVE.name,
+        'parent_notebook_sha256':display_sha,'previous_display_notebook':ARCHIVE.name,
         'figures_source_sha256':sha_bytes(PLOT.read_bytes()),
         'editable_generator_sha256':sha_bytes(Path(__file__).read_bytes()),
         'conversion_source_commit':subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip()})
@@ -258,7 +276,7 @@ Không có lựa chọn cuối cùng được tự áp dụng, không khởi ch�
     if sha_bytes(TARGET.read_bytes())!=old_sha:
         raise RuntimeError('Notebook changed during conversion; original preserved')
     if ARCHIVE.exists():
-        if sha_bytes(ARCHIVE.read_bytes())!=old_sha:
+        if sha_bytes(ARCHIVE.read_bytes())!=display_sha:
             raise RuntimeError('Historical display notebook already exists with different contents')
     else:
         with ARCHIVE.open('xb') as handle:
