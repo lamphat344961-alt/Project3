@@ -195,4 +195,156 @@ Sửa code/ghi chú rồi lưu notebook hoặc gửi mã hình muốn chỉnh. C
                       'removed_figure_groups':13,'author_notes_preserved':len(author_notes)},ensure_ascii=True))
 
 
-if __name__=='__main__':main()
+def finalize_selection():
+    """Apply the next author decision: split03a, use04c and rank-only05a."""
+    import copy
+    original=TARGET.read_bytes();before=digest(original)
+    nb=nbf.reads(original.decode('utf-8'),as_version=4)
+    if nb.metadata.paac_vn.get('final_selection_applied'):
+        raise RuntimeError('Final selection already applied; preserve author edits.')
+    history=TARGET.with_name('PAAC_VN_Stage07_Review_before_final_selection.ipynb')
+    groups={}
+    for cell in nb.cells:
+        tags=cell.metadata.get('tags',[])
+        if any(t in tags for t in ('figure-guide','figure-drawing','author-notes')):
+            groups.setdefault(tags[1],[]).append(cell)
+    original03=next(c for c in groups['03a_taxonomy_seed_dots'] if c.cell_type=='code')
+    for exp in ('tn1','tn2'):
+        slug='03a_taxonomy_seed_dots_'+exp
+        copied=copy.deepcopy(groups['03a_taxonomy_seed_dots'])
+        for cell in copied:
+            cell.id=nbf.v4.new_code_cell().id
+            cell.metadata.tags=[cell.metadata.tags[0],slug]
+            cell.source=cell.source.replace('03a_taxonomy_seed_dots',slug)
+        plot=next(c for c in copied if c.cell_type=='code')
+        old="fig, axes = plt.subplots(2, 3, figsize=(17, 10), sharex=True, sharey=True)"
+        dims="(1, 2, figsize=(13, 6)" if exp=='tn1' else "(2, 2, figsize=(14, 9)"
+        chosen="CELLS[:2]" if exp=='tn1' else "CELLS[2:]"
+        assert old in plot.source,'03a author code changed; preserve it before splitting'
+        plot.source=plot.source.replace(old,
+            f"selected_cells = {chosen}\n    plot_reps = [r for r in REPS if ((tax.representation == r) & tax.cell.isin(selected_cells)).any()]\n    fig, axes = plt.subplots{dims}, sharex=True, sharey=True)")
+        plot.source=plot.source.replace('zip(axes.flat, CELLS)','zip(axes.flat, selected_cells)')
+        plot.source=plot.source.replace('enumerate(REPS)','enumerate(plot_reps)')
+        plot.source=plot.source.replace('ax.set_yticks(range(8), NAMES)',
+                                        'ax.set_yticks(range(len(plot_reps)), [NAME[r] for r in plot_reps])')
+        plot.source=plot.source.replace('ax.set_ylim(7.6, -0.6)','ax.set_ylim(len(plot_reps)-0.4, -0.6)')
+        plot.source=plot.source.replace('Taxonomy alignment · all available cells','Taxonomy alignment · '+exp.upper())
+        if exp=='tn2':
+            plot.source=plot.source.replace('Unavailable cells are not zero scores.',
+                'LaBSE: native cap256 only; missing is not zero.\\nE5 native/T512 use the same prepared inputs/cap512; observed equal outputs are shown as separate protocol cells.')
+        guide=next(c for c in copied if 'figure-guide' in c.metadata.tags)
+        if exp=='tn1':
+            guide.source='''<a id="03a_taxonomy_seed_dots_tn1"></a>
+## 03a TN1 — Taxonomy alignment trên benchmark tiếng Việt
+
+**RQ2:** Hai panel char950/native,8 recipes. Mỗi chấm xanh là một seed42–51, hình thoi cam là mean AMI; cùng trục AMI với bản TN2 để đối chiếu khi cần.
+
+**Quan sát:** E5 đầu char950 theo mean AMI; BGE-M3 đầu native. Chênh nhỏ giữa các recipes không tự chứng minh superiority/equivalence. Tách TN1 khỏi TN2 chỉ đổi bố cục, không đổi seed observations hoặc metric.
+
+**Nguồn:** `results/stage05/combined_20261025_001/taxonomy_all_by_seed.csv`. Được tác giả chọn, thay phần TN1 trong03a gộp trước đó.
+'''
+        else:
+            guide.source='''<a id="03a_taxonomy_seed_dots_tn2"></a>
+## 03a TN2 — Taxonomy alignment theo hai ngôn ngữ
+
+**RQ1:** Bốn panel EN/VI × native/T512, chỉ hiển thị5 recipes có paired results. Chấm xanh=10 seed observations, cam=mean. LaBSE chỉ có native cap256; T512 ghi not evaluated.
+
+**Ý nghĩa:** Đặt EN và VI cạnh nhau theo cùng input condition để xem taxonomy alignment phụ thuộc recipe/ngôn ngữ thế nào. Không suy causal translation loss.
+
+**E5:** Native/T512 cùng prepared inputs và cap512, encode riêng và quan sát outputs trùng; không phải do TN2 bị cắt char950. Giữ cells riêng theo protocol, không coi là bằng chứng độc lập của hiệu ứng input.
+
+**Nguồn:** `results/stage05/combined_20261025_001/taxonomy_all_by_seed.csv`. Tách khỏi TN1 theo yêu cầu tác giả; không có thí nghiệm mới.
+'''
+        groups[slug]=copied
+    # Retain exactly panel(b) of05a, alongside the selected05b scatter.
+    rank=next(c for c in groups['05a_probe_rank_heatmap'] if c.cell_type=='code')
+    start=rank.source.index('    fig, axes = plt.subplots(')
+    matrix=rank.source.index('    matrix = np.full(',start)
+    end=rank.source.index('    show_figure(',matrix)
+    rank.source=(rank.source[:start]+"    fig, ax = plt.subplots(figsize=(12, 8))\n"
+        +rank.source[matrix:end].replace('axes[1]','ax').replace('(b) Ranks within available models of each view','Ranks within available models of each view')
+        +"    show_figure(fig, '05a_probe_rank_heatmap', 'Clustering and probe ranks', 'Author selection', "
+        +repr('Selected panel(b) from05a, companion to05b. Ranks use common recipe families within each view; ties receive average rank.\n'
+              'AMI: ten-seed mean; probe: one fixed-split evaluation. TF-IDF clustering is transductive, probe fit is train-only.')
+        +", '5 - Probe and AMI')\n\ndraw_this_figure()")
+    rank_guide=next(c for c in groups['05a_probe_rank_heatmap'] if 'figure-guide' in c.metadata.tags)
+    rank_guide.source='''<a id="05a_probe_rank_heatmap"></a>
+## 05a(b) — Heatmap thứ hạng, bổ trợ scatter05b
+
+Tác giả chọn **chỉ panel(b)** của05a để đặt cùng05b; panel(a) score-dot đã bỏ. Mỗi hàng là recipe, mỗi cặp cột là hạng AMI và Macro-F1 trong cùng view. Hạng1 cao nhất; ties dùng average rank; ô trống là không có phép đánh giá, không phải score0.
+
+**RQ2:** Dùng cùng05b để phân biệt thứ hạng với độ lớn điểm thực. AMI dùng mean10seeds; probe có một test evaluation. TF-IDF clustering/probe khác fit scope, chỉ ghép theo recipe family. Số model trong TN1/TN2 khác nhau nên không coi một bậc hạng là cùng khoảng cách điểm giữa các view.
+
+**Nguồn:** Stage05 taxonomy_summary/probe_all; không thay số liệu. Đây là hình bổ trợ05b, chưa khóa cách ghép panel ở layout paper.
+'''
+    # Latest author steering: no special color for the highest F1 in05b.
+    scatter=next(c for c in groups['05b_probe_ami_scatter'] if c.cell_type=='code')
+    scatter.source='\n'.join(line for line in scatter.source.splitlines()
+                             if 'best_f1 =' not in line and 'point_color =' not in line)
+    scatter.source=scatter.source.replace('color=point_color','color=BLUE').replace(
+        '\\nOrange points mark the highest Macro-F1 within each panel; exact ties are all highlighted.','')
+    nb.metadata.paac_vn.pop('05b_highlight',None)
+    order=['01a_pipeline_full','02a_benchmark_all49',
+           '03a_taxonomy_seed_dots_tn1','03a_taxonomy_seed_dots_tn2',
+           '04b_partition_only','04c_retrieval_dots','05b_probe_ami_scatter','05a_probe_rank_heatmap']
+    original_notes={c.id:c.source for slug in order if slug in groups and not slug.startswith('03a_')
+                    for c in groups[slug] if 'author-notes' in c.metadata.tags}
+    header=nb.cells[0]
+    header.source='''# PAAC-VN · Chặng07 · Bộ hình đã chốt để viết bài
+
+Tác giả đã chọn02a thay02b;03a tách TN1/TN2; retrieval dùng04c; scatter05b kèm heatmap(b)05a. Giữ01a cho thiết kế và04b cho partition C/W/S theo dàn ý đang dùng.
+
+Notebook có8 cell hình (heatmap05a là bản bổ trợ05b), giữ code Matplotlib trực tiếp. Chạy setup một lần rồi chạy cell bất kỳ; outputs đã lưu sẵn. Chỉnh code/ghi chú trong notebook không tự đổi module Python, dữ liệu hoặc kết quả.
+
+Các phương án thay thế không còn trong bản duyệt chính; bản trước lần chốt giữ ở `PAAC_VN_Stage07_Review_before_final_selection.ipynb`. Không tự phân bổ hình đã bỏ sang phụ lục.
+
+RQ1 đánh giá tương ứng EN–VI; RQ2 đánh giá recipes/input conditions với taxonomy VI. Chốt lựa chọn hình không đồng nghĩa toàn bộ findings/outline/manuscript đã được phê duyệt. Chặng08 chưa mở.
+'''
+    setup=next(c for c in nb.cells if 'plot-setup' in c.metadata.get('tags',[]))
+    toc=nbf.v4.new_markdown_cell('## Danh mục hình đã chốt\n\n'+'\n'.join(f'- [{slug}](#{slug})' for slug in order))
+    end=nbf.v4.new_markdown_cell('''## Bước tiếp theo
+
+Đã chốt nội dung hình. Tiếp tục chốt mạch viết/findings, caption, bảng kết quả và cách bố trí paper theo RQ. Notebook giữ riêng scatter05b và heatmap05a(b) để quan sát rõ; có thể ghép panel khi typeset sau này, không cần tính lại metrics.
+''')
+    nb.cells=[header,setup,toc,*[c for slug in order for c in groups[slug]],end]
+    for c in nb.cells:
+        if c.cell_type=='code':c.outputs=[];c.execution_count=None
+    meta=nb.metadata.paac_vn
+    meta.update({'final_selection_applied':True,'n_figures':8,'main_figure_ids':order,
+                 'selection_status':'AUTHOR_FINAL_FIGURE_SELECTION',
+                 'companion_figures':{'05b_probe_ami_scatter':['05a_probe_rank_heatmap (former panel b)']},
+                 'before_final_selection_sha256':before,'before_final_selection_notebook':history.name,
+                 'revision_code_sha256':digest(Path(__file__).read_bytes())})
+    meta['selected_original_figures']=['01a_pipeline_full','02a_benchmark_all49',
+        '03a_taxonomy_seed_dots','04b_partition_only','04c_retrieval_dots',
+        '05b_probe_ami_scatter','05a_probe_rank_heatmap (panel b)']
+    meta['split_figures']={'03a_taxonomy_seed_dots':order[2:4]}
+    meta['unchanged_author_code_ids']=['01a_pipeline_full','02a_benchmark_all49','04b_partition_only','04c_retrieval_dots']
+    meta['removed_from_active_notebook']=list(dict.fromkeys(
+        meta.get('removed_from_active_notebook',[])+[s for s in groups if s not in order and s!='03a_taxonomy_seed_dots']))
+    meta.pop('added_split_figure',None)
+    meta['annotations']={k:v for k,v in meta.get('annotations',{}).items() if k in order}
+    meta['annotations'].pop('05a_probe_rank_heatmap',None)
+    nbf.validate(nb)
+    client=NotebookClient(nb,timeout=120,kernel_name='python3',resources={'metadata':{'path':str(TARGET.parent)}})
+    client.create_kernel_manager();client.km.kernel_spec.argv=[sys.executable,'-m','ipykernel_launcher','-f','{connection_file}']
+    client.execute()
+    checks=[]
+    for c in nb.cells:
+        if 'figure-drawing' in c.metadata.get('tags',[]):
+            images=[o.data['image/png'] for o in c.outputs if 'image/png' in o.get('data',{})]
+            if len(images)!=1:raise RuntimeError('Expected one image per selected cell')
+            checks.append({'id':c.metadata.tags[1],'png_sha256':digest(base64.b64decode(images[0]))})
+    if len(checks)!=8:raise RuntimeError('Expected8 figures')
+    if {c.id:c.source for c in nb.cells if c.id in original_notes}!=original_notes:raise RuntimeError('Author notes changed')
+    if digest(TARGET.read_bytes())!=before:raise RuntimeError('Concurrent notebook edit')
+    if history.exists():raise RuntimeError('Final-selection history already exists')
+    with history.open('xb') as handle:handle.write(original)
+    meta['render_checks']=checks;meta['execution_status']='ALL_8_FINAL_FIGURE_CELLS_EXECUTED'
+    nbf.validate(nb);nbf.write(nb,TARGET)
+    print(json.dumps({'figures':len(checks),'cells':len(nb.cells),'selected':order},ensure_ascii=True))
+
+
+if __name__=='__main__':
+    if '--finalize-selection' in sys.argv:finalize_selection()
+    else:main()
