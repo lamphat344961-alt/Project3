@@ -8,3 +8,11 @@ __pycache__/
 output/kaggle/
 output/kaggle_inference/
 .venv-labse-local/
+research_stages/
+paper/
+tmp/
+kaggle/
+output/
+stage02_embeddings_kg_20261024_134531_840336/
+private/
+
